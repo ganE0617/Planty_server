@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from datetime import datetime, timedelta
@@ -15,10 +16,19 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 # Security configuration
 SECRET_KEY = "your-secret-key-here"  # Change this in production
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours instead of 30 minutes
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
@@ -79,6 +89,21 @@ class PlantResponse(BaseModel):
     message: str
     plant: Optional[Plant] = None
 
+class PlantLedBase(BaseModel):
+    plant_id: int
+    mode: str
+    r: int
+    g: int
+    b: int
+
+class PlantLedCreate(PlantLedBase):
+    pass
+
+class PlantLedResponse(BaseModel):
+    success: bool
+    message: str
+    led: Optional[PlantLedBase] = None
+
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -93,16 +118,20 @@ def create_access_token(data: dict):
     return encoded_jwt
 
 async def get_current_user(authorization: str = Header(None), db: Session = Depends(get_db)):
+    print(f"Received Authorization header: {authorization}")
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authentication credentials")
     
     token = authorization.split(" ")[1]
+    print(f"Extracted token: {token}")
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
+        print(f"Decoded user_id: {user_id}")
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    except JWTError:
+    except JWTError as e:
+        print(f"JWT Error: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid authentication credentials")
     
     user = db.query(models.User).filter(models.User.user_id == user_id).first()
@@ -201,6 +230,85 @@ async def register_plant(
         success=True,
         message="Plant registered successfully",
         plant=new_plant
+    )
+
+@app.post("/auth/refresh", response_model=LoginResponse)
+async def refresh_token(current_user: models.User = Depends(get_current_user)):
+    access_token = create_access_token(data={"sub": current_user.user_id})
+    return LoginResponse(
+        success=True,
+        message="Token refreshed successfully",
+        token=access_token,
+        userData=User(
+            userId=current_user.user_id,
+            nickname=current_user.nickname,
+            email=current_user.email
+        ),
+        requiresPlantRegistration=False
+    )
+
+@app.get("/plants", response_model=List[Plant])
+async def get_plants(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    plants = db.query(models.Plant).filter(models.Plant.owner_id == current_user.user_id).all()
+    return plants
+
+@app.post("/plants/{plant_id}/led", response_model=PlantLedResponse)
+async def set_plant_led(
+    plant_id: int,
+    led: PlantLedCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 식물 소유권 체크
+    plant = db.query(models.Plant).filter(models.Plant.id == plant_id, models.Plant.owner_id == current_user.user_id).first()
+    if not plant:
+        raise HTTPException(status_code=404, detail="Plant not found")
+
+    # 기존 led 설정이 있으면 업데이트, 없으면 새로 생성
+    plant_led = db.query(models.PlantLed).filter(models.PlantLed.plant_id == plant_id).first()
+    if plant_led:
+        plant_led.mode = led.mode
+        plant_led.r = led.r
+        plant_led.g = led.g
+        plant_led.b = led.b
+    else:
+        plant_led = models.PlantLed(
+            plant_id=plant_id,
+            mode=led.mode,
+            r=led.r,
+            g=led.g,
+            b=led.b
+        )
+        db.add(plant_led)
+    db.commit()
+    db.refresh(plant_led)
+    return PlantLedResponse(success=True, message="LED mode updated", led=led)
+
+@app.get("/plants/{plant_id}/led", response_model=PlantLedResponse)
+async def get_plant_led(
+    plant_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    plant_led = db.query(models.PlantLed).join(models.Plant).filter(
+        models.PlantLed.plant_id == plant_id,
+        models.Plant.owner_id == current_user.user_id
+    ).first()
+    if not plant_led:
+        return PlantLedResponse(success=False, message="No LED setting found")
+    return PlantLedResponse(
+        success=True,
+        message="LED setting found",
+        led=PlantLedBase(
+            plant_id=plant_led.plant_id,
+            mode=plant_led.mode,
+            r=plant_led.r,
+            g=plant_led.g,
+            b=plant_led.b
+        )
     )
 
 if __name__ == "__main__":

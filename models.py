@@ -25,4 +25,17 @@ class Plant(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     owner_id = Column(String(50), ForeignKey("users.user_id"), nullable=False)
     
-    owner = relationship("User", back_populates="plants") 
+    owner = relationship("User", back_populates="plants")
+
+class PlantLed(Base):
+    __tablename__ = "plant_leds"
+
+    id = Column(Integer, primary_key=True, index=True)
+    plant_id = Column(Integer, ForeignKey("plants.id"), nullable=False)
+    mode = Column(String(50), nullable=False)
+    r = Column(Integer, nullable=False)
+    g = Column(Integer, nullable=False)
+    b = Column(Integer, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    plant = relationship("Plant") 
