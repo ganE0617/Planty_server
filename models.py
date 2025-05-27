@@ -36,6 +36,17 @@ class PlantLed(Base):
     r = Column(Integer, nullable=False)
     g = Column(Integer, nullable=False)
     b = Column(Integer, nullable=False)
+    strength = Column(Integer, nullable=False, default=128)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     plant = relationship("Plant") 
+
+class PlantAIAnalysis(Base):
+    __tablename__ = "plant_ai_analysis"
+
+    id = Column(Integer, primary_key=True, index=True)
+    plant_id = Column(Integer, ForeignKey("plants.id"), nullable=False)
+    analysis_text = Column(String(2048), nullable=False)  # 충분히 긴 길이로 지정
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    plant = relationship("Plant")

@@ -10,6 +10,8 @@ import uvicorn
 from sqlalchemy.orm import Session
 from database import get_db, engine
 import models
+from models import PlantAIAnalysis
+from sqlalchemy import desc
 
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
@@ -95,6 +97,7 @@ class PlantLedBase(BaseModel):
     r: int
     g: int
     b: int
+    strength: int = 128
 
 class PlantLedCreate(PlantLedBase):
     pass
@@ -262,30 +265,31 @@ async def set_plant_led(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # 식물 소유권 체크
     plant = db.query(models.Plant).filter(models.Plant.id == plant_id, models.Plant.owner_id == current_user.user_id).first()
     if not plant:
         raise HTTPException(status_code=404, detail="Plant not found")
 
-    # 기존 led 설정이 있으면 업데이트, 없으면 새로 생성
     plant_led = db.query(models.PlantLed).filter(models.PlantLed.plant_id == plant_id).first()
     if plant_led:
         plant_led.mode = led.mode
         plant_led.r = led.r
         plant_led.g = led.g
         plant_led.b = led.b
+        plant_led.strength = led.strength
     else:
         plant_led = models.PlantLed(
             plant_id=plant_id,
             mode=led.mode,
             r=led.r,
             g=led.g,
-            b=led.b
+            b=led.b,
+            strength=led.strength
         )
         db.add(plant_led)
     db.commit()
     db.refresh(plant_led)
     return PlantLedResponse(success=True, message="LED mode updated", led=led)
+
 
 @app.get("/plants/{plant_id}/led", response_model=PlantLedResponse)
 async def get_plant_led(
@@ -307,9 +311,28 @@ async def get_plant_led(
             mode=plant_led.mode,
             r=plant_led.r,
             g=plant_led.g,
-            b=plant_led.b
+            b=plant_led.b,
+            strength=plant_led.strength
         )
     )
+
+@app.post("/plants/{plant_id}/ai-analysis")
+async def save_plant_ai_analysis(plant_id: int, data: dict, db: Session = Depends(get_db)):
+    analysis_text = data.get("analysis_text")
+    if not analysis_text:
+        raise HTTPException(status_code=400, detail="analysis_text is required")
+    analysis = PlantAIAnalysis(plant_id=plant_id, analysis_text=analysis_text)
+    db.add(analysis)
+    db.commit()
+    db.refresh(analysis)
+    return {"success": True, "id": analysis.id, "created_at": analysis.created_at}
+
+@app.get("/plants/{plant_id}/ai-analysis")
+async def get_latest_plant_ai_analysis(plant_id: int, db: Session = Depends(get_db)):
+    analysis = db.query(PlantAIAnalysis).filter(PlantAIAnalysis.plant_id == plant_id).order_by(desc(PlantAIAnalysis.created_at)).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="No analysis found")
+    return {"success": True, "analysis_text": analysis.analysis_text, "created_at": analysis.created_at}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
