@@ -13,6 +13,15 @@ import models
 from models import PlantAIAnalysis
 from sqlalchemy import desc
 from ros_publisher import rgb_publisher
+import cv2
+import numpy as np
+from PIL import Image
+import io
+import base64
+from openai import OpenAI
+import os
+from dotenv import load_dotenv
+import requests
 
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
@@ -341,23 +350,84 @@ async def get_plant_led(
         )
     )
 
-@app.post("/plants/{plant_id}/ai-analysis")
-async def save_plant_ai_analysis(plant_id: int, data: dict, db: Session = Depends(get_db)):
-    analysis_text = data.get("analysis_text")
-    if not analysis_text:
-        raise HTTPException(status_code=400, detail="analysis_text is required")
+@app.get("/plants/{plant_id}/ai-analysis")
+async def get_latest_plant_ai_analysis(
+    plant_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. MJPEG 스트림에서 프레임 추출
+    url = "https://planty.gaeun.xyz/image_raw"
+    try:
+        r = requests.get(url, stream=True, timeout=20)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to connect to image stream: {str(e)}")
+    bytes_data = b""
+    frame_found = False
+    img = None
+    for chunk in r.iter_content(chunk_size=1024):
+        bytes_data += chunk
+        a = bytes_data.find(b'\xff\xd8')  # JPEG 시작
+        b = bytes_data.find(b'\xff\xd9')  # JPEG 끝
+        if a != -1 and b != -1 and b > a:
+            jpg = bytes_data[a:b+2]
+            bytes_data = bytes_data[b+2:]
+            img_array = np.frombuffer(jpg, dtype=np.uint8)
+            frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            if frame is not None:
+                img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                frame_found = True
+                break
+    if not frame_found or img is None:
+        raise HTTPException(status_code=500, detail="프레임을 추출하지 못했습니다. 스트림이 정상인지 확인하세요.")
+
+    # 2. 이미지를 base64로 인코딩
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG")
+    base64_image = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    base64_image_url = f"data:image/jpeg;base64,{base64_image}"
+
+    # 3. DB에서 plant_id로 식물 종류(type) 조회
+    plant = db.query(models.Plant).filter(models.Plant.id == plant_id, models.Plant.owner_id == current_user.user_id).first()
+    if not plant:
+        raise HTTPException(status_code=404, detail="Plant not found")
+    plant_type = plant.type
+
+    # 4. OpenAI Vision API 호출
+    openai_api_key = os.environ.get("OPENAI_API_KEY")
+    if not openai_api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다.")
+    client = OpenAI(api_key=openai_api_key)
+    prompt = f"이 식물({plant_type})의 건강 상태를 진단해줘. 병충해, 과습, 잎의 색 변화, 성장 상태 등을 고려해서 설명해줘."
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": prompt },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": base64_image_url
+                            },
+                        },
+                    ],
+                }
+            ],
+            max_tokens=1024,
+        )
+        analysis_text = response.choices[0].message.content
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OpenAI Vision API 호출 실패: {str(e)}")
+
+    # 5. DB에 저장
     analysis = PlantAIAnalysis(plant_id=plant_id, analysis_text=analysis_text)
     db.add(analysis)
     db.commit()
     db.refresh(analysis)
-    return {"success": True, "id": analysis.id, "created_at": analysis.created_at}
-
-@app.get("/plants/{plant_id}/ai-analysis")
-async def get_latest_plant_ai_analysis(plant_id: int, db: Session = Depends(get_db)):
-    analysis = db.query(PlantAIAnalysis).filter(PlantAIAnalysis.plant_id == plant_id).order_by(desc(PlantAIAnalysis.created_at)).first()
-    if not analysis:
-        raise HTTPException(status_code=404, detail="No analysis found")
-    return {"success": True, "analysis_text": analysis.analysis_text, "created_at": analysis.created_at}
+    return {"success": True, "id": analysis.id, "created_at": analysis.created_at, "analysis_text": analysis.analysis_text}
 
 @app.get("/plants/{plant_id}", response_model=PlantResponse)
 async def get_plant(
@@ -370,6 +440,9 @@ async def get_plant(
     if not plant:
         return PlantResponse(success=False, message="Plant not found", plant=None)
     return PlantResponse(success=True, message="Plant found", plant=plant)
+
+# .env 파일에서 환경변수 로드
+load_dotenv()
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
