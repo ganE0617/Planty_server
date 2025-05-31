@@ -17,3 +17,5 @@ sqlalchemy==2.0.41
 mysqlclient==2.2.7
 python-dotenv==1.1.0
 mysql-connector-python==9.3.0
+roslibpy==1.8.1
+bcrypt==4.0.1

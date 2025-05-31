@@ -12,6 +12,7 @@ from database import get_db, engine
 import models
 from models import PlantAIAnalysis
 from sqlalchemy import desc
+from ros_publisher import rgb_publisher
 
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
@@ -296,6 +297,20 @@ async def set_plant_led(
             strength=led.strength
         )
         db.add(plant_led)
+    
+    # Publish RGB values to ROS
+    try:
+        strength_ratio = led.strength / 255.0
+        strength_ratio /= 2.0
+        rgb_publisher.publish_rgb(
+            led.r * strength_ratio,
+            led.g * strength_ratio,
+            led.b * strength_ratio
+        )
+    except Exception as e:
+        print(f"Error publishing RGB values: {str(e)}")
+        # Continue with database update even if ROS publishing fails
+    
     db.commit()
     db.refresh(plant_led)
     return PlantLedResponse(success=True, message="LED mode updated", led=led)
@@ -351,6 +366,7 @@ async def get_plant(
     db: Session = Depends(get_db)
 ):
     plant = db.query(models.Plant).filter(models.Plant.id == plant_id, models.Plant.owner_id == current_user.user_id).first()
+    print('plant', plant)
     if not plant:
         return PlantResponse(success=False, message="Plant not found", plant=None)
     return PlantResponse(success=True, message="Plant found", plant=plant)

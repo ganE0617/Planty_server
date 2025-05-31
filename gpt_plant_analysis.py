@@ -45,6 +45,32 @@ img.save(buffer, format="JPEG")
 base64_image = base64.b64encode(buffer.getvalue()).decode("utf-8")
 base64_image_url = f"data:image/jpeg;base64,{base64_image}"
 
+# 4. FastAPI 서버에 POST로 저장하기 전에 plant_id로 식물 종류(type) 조회
+plant_id = 4  # 실제 앱에서 사용하는 식물 id로 변경 가능
+user_token = os.environ.get("USER_TOKEN")
+if not user_token:
+    raise Exception("USER_TOKEN 환경변수가 설정되어 있지 않습니다.")
+
+plant_info_url = f"https://planty.gaeun.xyz/plants/{plant_id}"
+headers = {"Authorization": f"Bearer {user_token}"}
+plant_resp = requests.get(plant_info_url, headers=headers)
+if plant_resp.status_code != 200 or not plant_resp.json().get("plant"):
+    raise Exception(f"식물 정보를 불러오지 못했습니다: {plant_resp.text}")
+plant_type = plant_resp.json()["plant"]["type"]
+
+# 4. FastAPI 서버에 POST로 저장하기 전에 plant_id로 식물 종류(type) 조회
+plant_id = 5  # 실제 앱에서 사용하는 식물 id로 변경 가능
+user_token = os.environ.get("USER_TOKEN")
+if not user_token:
+    raise Exception("USER_TOKEN 환경변수가 설정되어 있지 않습니다.")
+
+plant_info_url = f"https://planty.gaeun.xyz/plants/{plant_id}"
+headers = {"Authorization": f"Bearer {user_token}"}
+plant_resp = requests.get(plant_info_url, headers=headers)
+if plant_resp.status_code != 200 or not plant_resp.json().get("plant"):
+    raise Exception(f"식물 정보를 불러오지 못했습니다: {plant_resp.text}")
+plant_type = plant_resp.json()["plant"]["type"]
+
 # 3. OpenAI Vision API 호출 (openai 패키지 사용)
 print("[4] OpenAI Vision API 호출")
 openai_api_key = os.environ.get("OPENAI_API_KEY")
@@ -52,7 +78,7 @@ if not openai_api_key:
     raise Exception("OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다.")
 client = OpenAI(api_key=openai_api_key)
 
-prompt = "이 식물의 건강 상태를 진단해줘. 병충해, 과습, 잎의 색 변화, 성장 상태 등을 고려해서 설명해줘."
+prompt = f"이 식물({plant_type})의 건강 상태를 진단해줘. 병충해, 과습, 잎의 색 변화, 성장 상태 등을 고려해서 설명해줘."
 
 response = client.chat.completions.create(
     model="gpt-4o",  # "gpt-4.1-mini"는 존재하지 않으므로 gpt-4o 또는 gpt-4 사용 권장
@@ -77,8 +103,7 @@ analysis_text = response.choices[0].message.content
 print("[5] GPT 분석 결과:", analysis_text)
 
 # 4. FastAPI 서버에 POST로 저장
-plant_id = 1  # 실제 앱에서 사용하는 식물 id로 변경 가능
-api_url = f"http://localhost:8000/plants/{plant_id}/ai-analysis"
+api_url = f"https://planty.gaeun.xyz/plants/{plant_id}/ai-analysis"
 print("[6] FastAPI POST 요청 시작")
 save_resp = requests.post(api_url, json={"analysis_text": analysis_text})
 print("[7] POST status:", save_resp.status_code, save_resp.text)
