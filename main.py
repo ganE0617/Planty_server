@@ -73,6 +73,7 @@ class PlantBase(BaseModel):
     name: str
     type: str
     watering_cycle: int
+    last_watered: Optional[str] = None  # ISO string from client
 
 class PlantCreate(PlantBase):
     pass
@@ -218,17 +219,26 @@ async def register_plant(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    from datetime import datetime
+    last_watered_dt = None
+    if plant.last_watered:
+        try:
+            last_watered_dt = datetime.fromisoformat(plant.last_watered)
+        except Exception:
+            last_watered_dt = datetime.utcnow()
+    else:
+        last_watered_dt = datetime.utcnow()
+
     new_plant = models.Plant(
         name=plant.name,
         type=plant.type,
         watering_cycle=plant.watering_cycle,
+        last_watered=last_watered_dt,
         owner_id=current_user.user_id
     )
-    
     db.add(new_plant)
     db.commit()
     db.refresh(new_plant)
-    
     return PlantResponse(
         success=True,
         message="Plant registered successfully",
@@ -333,6 +343,17 @@ async def get_latest_plant_ai_analysis(plant_id: int, db: Session = Depends(get_
     if not analysis:
         raise HTTPException(status_code=404, detail="No analysis found")
     return {"success": True, "analysis_text": analysis.analysis_text, "created_at": analysis.created_at}
+
+@app.get("/plants/{plant_id}", response_model=PlantResponse)
+async def get_plant(
+    plant_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    plant = db.query(models.Plant).filter(models.Plant.id == plant_id, models.Plant.owner_id == current_user.user_id).first()
+    if not plant:
+        return PlantResponse(success=False, message="Plant not found", plant=None)
+    return PlantResponse(success=True, message="Plant found", plant=plant)
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
